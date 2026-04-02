@@ -1,0 +1,15 @@
+# Core
+# No core dependencies — runs with Python stdlib for demo mode
+
+# Kraken CLI integration (install Kraken CLI separately)
+# https://www.kraken.com/kraken-cli
+
+# On-chain / ERC-8004 (optional — needed for on-chain features)
+web3>=6.0.0
+eth-account>=0.11.0
+
+# LLM explanation (optional — falls back to template if unavailable)
+anthropic>=0.40.0
+
+# Development
+# pytest>=8.0.0
