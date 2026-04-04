@@ -11,5 +11,10 @@ eth-account>=0.11.0
 # LLM explanation (optional — falls back to template if unavailable)
 anthropic>=0.40.0
 
+# Dashboard
+streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.0.0
+
 # Development
 # pytest>=8.0.0

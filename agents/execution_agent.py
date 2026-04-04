@@ -1,7 +1,7 @@
 from __future__ import annotations
 """
 Execution Agent: routes trade intents to Kraken CLI or on-chain Risk Router.
-Supports paper trading, live trading via Kraken, and on-chain execution.
+Supports paper trading (Kraken CLI sandbox), live trading, and internal simulation.
 """
 
 from dataclasses import dataclass
@@ -9,6 +9,7 @@ from typing import Optional
 
 from agents.portfolio_agent import TradeIntent
 from config.settings import settings
+from execution.kraken_executor import KrakenExecutor
 from portfolio.tracker import PortfolioTracker
 from utils.logger import logger
 
@@ -18,7 +19,7 @@ class ExecutionResult:
     success: bool
     trade_intent: TradeIntent
     execution_price: float
-    execution_source: str       # "paper", "kraken_cli", "onchain"
+    execution_source: str       # "paper_internal", "kraken_paper", "kraken_live", "onchain"
     tx_hash: Optional[str]      # For on-chain executions
     order_id: Optional[str]     # For Kraken executions
     message: str
@@ -28,6 +29,7 @@ class ExecutionAgent:
     def __init__(self, portfolio: PortfolioTracker):
         self.portfolio = portfolio
         self.mode = settings.mode
+        self.kraken = KrakenExecutor()
 
     def execute(self, trade: TradeIntent) -> ExecutionResult:
         """Execute a trade intent through the appropriate channel."""
@@ -39,112 +41,131 @@ class ExecutionAgent:
                 message="HOLD — no action taken",
             )
 
-        if self.mode == "paper":
-            return self._execute_paper(trade)
-        elif self.mode == "live":
-            return self._execute_kraken(trade)
+        if self.mode == "paper" and self.kraken.is_available():
+            return self._execute_kraken_paper(trade)
+        elif self.mode == "live" and self.kraken.is_available():
+            return self._execute_kraken_live(trade)
         else:
-            return self._execute_paper(trade)
+            return self._execute_internal(trade)
 
-    def _execute_paper(self, trade: TradeIntent) -> ExecutionResult:
-        """Execute trade in paper trading mode using portfolio tracker."""
+    def _execute_kraken_paper(self, trade: TradeIntent) -> ExecutionResult:
+        """Execute via Kraken CLI paper trading sandbox."""
+        pair = trade.pair
+        volume = trade.quantity
+
+        if trade.direction == "CLOSE":
+            # Determine sell side based on current position
+            result = self.kraken.paper_sell(pair, volume)
+        elif trade.direction == "BUY":
+            result = self.kraken.paper_buy(pair, volume)
+        else:  # SELL
+            result = self.kraken.paper_sell(pair, volume)
+
+        if result and result.get("action") == "market_order_filled":
+            fill_price = result.get("price", trade.entry_price)
+            order_id = result.get("order_id", "unknown")
+
+            # Update internal portfolio tracker
+            if trade.direction == "CLOSE":
+                self.portfolio.close_position(pair, fill_price)
+            else:
+                side = "long" if trade.direction == "BUY" else "short"
+                self.portfolio.open_position(
+                    pair, side, volume, fill_price,
+                    trade.stop_loss, trade.take_profit,
+                )
+
+            logger.log_trade(trade.direction, pair, volume, fill_price, "kraken_paper")
+            return ExecutionResult(
+                success=True, trade_intent=trade,
+                execution_price=fill_price, execution_source="kraken_paper",
+                tx_hash=None, order_id=order_id,
+                message=f"Kraken Paper {trade.direction}: {volume} @ ${fill_price:.2f} (order {order_id})",
+            )
+
+        # Kraken paper failed — fall back to internal
+        logger.warning("Kraken paper order failed, falling back to internal simulation")
+        return self._execute_internal(trade)
+
+    def _execute_kraken_live(self, trade: TradeIntent) -> ExecutionResult:
+        """Execute via Kraken CLI live trading."""
+        pair = trade.pair
+        side = "buy" if trade.direction == "BUY" else "sell"
+        volume = trade.quantity
+
+        if trade.direction == "CLOSE":
+            side = "sell"  # Close long by selling
+
+        result = self.kraken.place_market_order(pair, side, volume)
+        if result:
+            order_id = result.get("order_id", result.get("txid", "unknown"))
+            fill_price = result.get("price", trade.entry_price)
+
+            # Update internal tracker
+            if trade.direction == "CLOSE":
+                self.portfolio.close_position(pair, fill_price)
+            else:
+                pos_side = "long" if trade.direction == "BUY" else "short"
+                self.portfolio.open_position(
+                    pair, pos_side, volume, fill_price,
+                    trade.stop_loss, trade.take_profit,
+                )
+
+            logger.log_trade(trade.direction, pair, volume, fill_price, "kraken_live")
+            return ExecutionResult(
+                success=True, trade_intent=trade,
+                execution_price=fill_price, execution_source="kraken_live",
+                tx_hash=None, order_id=str(order_id),
+                message=f"Kraken Live {trade.direction}: order {order_id}",
+            )
+
+        logger.error("Kraken live order failed")
+        return ExecutionResult(
+            success=False, trade_intent=trade,
+            execution_price=trade.entry_price, execution_source="kraken_live",
+            tx_hash=None, order_id=None,
+            message="Kraken live order failed",
+        )
+
+    def _execute_internal(self, trade: TradeIntent) -> ExecutionResult:
+        """Execute trade using internal portfolio simulation (no external dependency)."""
         price = trade.entry_price
 
         if trade.direction == "CLOSE":
             pnl = self.portfolio.close_position(trade.pair, price)
             if pnl is not None:
-                logger.log_trade("CLOSE", trade.pair, trade.quantity, price, "paper")
+                logger.log_trade("CLOSE", trade.pair, trade.quantity, price, "internal")
                 return ExecutionResult(
                     success=True, trade_intent=trade,
-                    execution_price=price, execution_source="paper",
+                    execution_price=price, execution_source="paper_internal",
                     tx_hash=None, order_id=None,
-                    message=f"Paper CLOSE: PnL=${pnl:.2f}",
+                    message=f"Internal CLOSE: PnL=${pnl:.2f}",
                 )
             return ExecutionResult(
                 success=False, trade_intent=trade,
-                execution_price=price, execution_source="paper",
+                execution_price=price, execution_source="paper_internal",
                 tx_hash=None, order_id=None,
                 message="Failed to close — no position found",
             )
 
         side = "long" if trade.direction == "BUY" else "short"
         success = self.portfolio.open_position(
-            pair=trade.pair,
-            side=side,
-            quantity=trade.quantity,
-            price=price,
-            stop_loss=trade.stop_loss,
-            take_profit=trade.take_profit,
+            pair=trade.pair, side=side, quantity=trade.quantity, price=price,
+            stop_loss=trade.stop_loss, take_profit=trade.take_profit,
         )
 
         if success:
-            logger.log_trade(trade.direction, trade.pair, trade.quantity, price, "paper")
+            logger.log_trade(trade.direction, trade.pair, trade.quantity, price, "internal")
             return ExecutionResult(
                 success=True, trade_intent=trade,
-                execution_price=price, execution_source="paper",
+                execution_price=price, execution_source="paper_internal",
                 tx_hash=None, order_id=None,
-                message=f"Paper {trade.direction}: {trade.quantity} @ ${price:.2f}",
+                message=f"Internal {trade.direction}: {trade.quantity} @ ${price:.2f}",
             )
 
         return ExecutionResult(
             success=False, trade_intent=trade,
-            execution_price=price, execution_source="paper",
+            execution_price=price, execution_source="paper_internal",
             tx_hash=None, order_id=None,
             message="Insufficient balance or position conflict",
         )
-
-    def _execute_kraken(self, trade: TradeIntent) -> ExecutionResult:
-        """Execute trade via Kraken CLI."""
-        import json
-        import subprocess
-
-        cli = settings.kraken.cli_path
-        pair = trade.pair
-
-        if trade.direction == "CLOSE":
-            # Close via opposite market order
-            cmd = [cli, "order", "create", pair, "market",
-                   "sell" if trade.direction == "CLOSE" else "buy",
-                   str(trade.quantity)]
-        elif trade.direction == "BUY":
-            cmd = [cli, "order", "create", pair, "market", "buy", str(trade.quantity)]
-        else:
-            cmd = [cli, "order", "create", pair, "market", "sell", str(trade.quantity)]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                output = json.loads(result.stdout) if result.stdout.strip() else {}
-                order_id = output.get("order_id", output.get("txid", "unknown"))
-                # Also update paper portfolio for tracking
-                if trade.direction == "CLOSE":
-                    self.portfolio.close_position(trade.pair, trade.entry_price)
-                else:
-                    side = "long" if trade.direction == "BUY" else "short"
-                    self.portfolio.open_position(
-                        trade.pair, side, trade.quantity, trade.entry_price,
-                        trade.stop_loss, trade.take_profit,
-                    )
-                logger.log_trade(trade.direction, pair, trade.quantity, trade.entry_price, "kraken_cli")
-                return ExecutionResult(
-                    success=True, trade_intent=trade,
-                    execution_price=trade.entry_price,
-                    execution_source="kraken_cli",
-                    tx_hash=None, order_id=str(order_id),
-                    message=f"Kraken {trade.direction}: order {order_id}",
-                )
-            else:
-                logger.error(f"Kraken CLI error: {result.stderr}")
-                return ExecutionResult(
-                    success=False, trade_intent=trade,
-                    execution_price=trade.entry_price,
-                    execution_source="kraken_cli",
-                    tx_hash=None, order_id=None,
-                    message=f"Kraken CLI error: {result.stderr[:200]}",
-                )
-        except FileNotFoundError:
-            logger.error("Kraken CLI not installed. Falling back to paper trading.")
-            return self._execute_paper(trade)
-        except Exception as e:
-            logger.error(f"Kraken execution failed: {e}")
-            return self._execute_paper(trade)

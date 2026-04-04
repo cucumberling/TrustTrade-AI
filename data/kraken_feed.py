@@ -1,10 +1,11 @@
 from __future__ import annotations
 """
 Kraken data feed via CLI and REST API.
-Supports both Kraken CLI (MCP) and direct REST API calls.
+3-tier fallback: Kraken CLI → Kraken REST API → Mock data.
 """
 
 import json
+import os
 import subprocess
 from typing import Optional
 
@@ -17,75 +18,75 @@ class KrakenFeed:
         self.cli_path = settings.kraken.cli_path
         self.pair = settings.trading_pair
 
-    def _run_cli(self, *args: str) -> Optional[dict]:
+    def _run_cli(self, *args: str) -> Optional[dict | list]:
         """Execute a Kraken CLI command and return parsed JSON output."""
-        cmd = [self.cli_path] + list(args)
+        cmd = [self.cli_path] + list(args) + ["-o", "json"]
+        env = os.environ.copy()
+        env["PATH"] = os.path.expanduser("~/bin") + ":" + env.get("PATH", "")
         try:
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
+                cmd, capture_output=True, text=True, timeout=30, env=env,
             )
             if result.returncode != 0:
-                logger.error(f"Kraken CLI error: {result.stderr}")
+                logger.error(f"Kraken CLI error: {result.stderr.strip()}")
                 return None
-            return json.loads(result.stdout) if result.stdout.strip() else None
+            if not result.stdout.strip():
+                return None
+            return json.loads(result.stdout)
         except FileNotFoundError:
-            logger.warning("Kraken CLI not found. Install it or set KRAKEN_CLI_PATH.")
             return None
         except subprocess.TimeoutExpired:
             logger.error("Kraken CLI command timed out")
             return None
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse Kraken CLI output: {result.stdout[:200]}")
+            logger.warning(f"Non-JSON CLI output: {result.stdout[:100]}")
             return None
 
-    def get_ticker(self, pair: Optional[str] = None) -> Optional[dict]:
+    def get_ticker(self, pair: Optional[str] = None) -> Optional[dict | list]:
         """Get current ticker data for a trading pair."""
         pair = pair or self.pair
         return self._run_cli("ticker", pair)
 
-    def get_ohlc(
-        self,
-        pair: Optional[str] = None,
-        interval: int = 60,
-        count: int = 100,
-    ) -> Optional[list[dict]]:
-        """Get OHLC candlestick data."""
+    def get_ohlc(self, pair: Optional[str] = None, interval: int = 60) -> Optional[list]:
+        """Get OHLC candlestick data from Kraken CLI."""
         pair = pair or self.pair
-        result = self._run_cli(
-            "ohlc", pair,
-            "--interval", str(interval),
-            "--count", str(count),
-        )
+        result = self._run_cli("ohlc", pair, "--interval", str(interval))
         if result and isinstance(result, list):
             return result
         return None
 
-    def get_orderbook(self, pair: Optional[str] = None, depth: int = 10) -> Optional[dict]:
-        """Get order book data."""
-        pair = pair or self.pair
-        return self._run_cli("orderbook", pair, "--depth", str(depth))
-
-    def get_recent_trades(self, pair: Optional[str] = None) -> Optional[list]:
-        """Get recent trades."""
-        pair = pair or self.pair
-        return self._run_cli("trades", pair)
+    def get_current_price(self, pair: Optional[str] = None) -> Optional[float]:
+        """Get the current price for a pair."""
+        ticker = self.get_ticker(pair)
+        if ticker and isinstance(ticker, list) and len(ticker) > 0:
+            return float(ticker[0].get("last", 0))
+        if ticker and isinstance(ticker, dict):
+            return float(ticker.get("last", ticker.get("c", [0])[0]))
+        return None
 
     def get_price_series(self, pair: Optional[str] = None, count: int = 50) -> list[float]:
-        """Get a series of closing prices. Falls back to mock data if CLI unavailable."""
-        ohlc = self.get_ohlc(pair=pair, count=count)
+        """Get closing prices. 3-tier fallback: CLI → REST → Mock."""
+        # Tier 1: Kraken CLI
+        ohlc = self.get_ohlc(pair=pair)
         if ohlc:
-            return [candle.get("close", candle.get("c", 0)) for candle in ohlc]
+            prices = []
+            for candle in ohlc:
+                close = candle.get("close", candle.get("c", 0))
+                if isinstance(close, str):
+                    close = float(close)
+                prices.append(close)
+            if prices:
+                logger.info(f"Got {len(prices)} prices from Kraken CLI")
+                return prices[-count:]
 
-        # Fallback to REST API
+        # Tier 2: Kraken REST API
         prices = self._fetch_prices_rest(pair or self.pair, count)
         if prices:
+            logger.info(f"Got {len(prices)} prices from Kraken REST API")
             return prices
 
-        # Final fallback to mock data
-        logger.warning("Using mock data — Kraken API unavailable")
+        # Tier 3: Mock data
+        logger.warning("Using mock data — Kraken unavailable")
         from data.mock_data import get_sample_btc_prices
         return get_sample_btc_prices()[:count]
 
@@ -93,25 +94,21 @@ class KrakenFeed:
         """Fetch prices via Kraken REST API as fallback."""
         try:
             import urllib.request
-            # Convert pair format: "BTC/USD" -> "XBTUSD"
             api_pair = pair.replace("BTC", "XBT").replace("/", "")
             url = f"{settings.kraken.rest_url}/0/public/OHLC?pair={api_pair}&interval=60"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
                 if data.get("error"):
-                    logger.error(f"Kraken REST error: {data['error']}")
                     return None
                 result = data.get("result", {})
-                # Get the first (and usually only) pair data
                 for key in result:
                     if key != "last":
                         candles = result[key]
-                        # OHLC format: [time, open, high, low, close, vwap, volume, count]
                         prices = [float(c[4]) for c in candles[-count:]]
                         return prices
         except Exception as e:
-            logger.warning(f"Kraken REST API unavailable: {e}")
+            logger.warning(f"Kraken REST unavailable: {e}")
         return None
 
 
