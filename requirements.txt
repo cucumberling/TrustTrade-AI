@@ -7,6 +7,7 @@
 # On-chain / ERC-8004 (optional — needed for on-chain features)
 web3>=6.0.0
 eth-account>=0.11.0
+python-dotenv>=1.0.0
 
 # LLM explanation (optional — falls back to template if unavailable)
 anthropic>=0.40.0

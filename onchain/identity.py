@@ -10,17 +10,19 @@ from typing import Optional
 from config.settings import settings
 from utils.logger import logger
 
-# ERC-8004 Identity Registry ABI (minimal)
+# ERC-8004 Identity Registry ABI (minimal — matches official deployment)
 IDENTITY_REGISTRY_ABI = [
     {
         "name": "register",
         "type": "function",
+        "stateMutability": "nonpayable",
         "inputs": [{"name": "agentURI", "type": "string"}],
         "outputs": [{"name": "agentId", "type": "uint256"}],
     },
     {
         "name": "setAgentURI",
         "type": "function",
+        "stateMutability": "nonpayable",
         "inputs": [
             {"name": "agentId", "type": "uint256"},
             {"name": "newURI", "type": "string"},
@@ -30,6 +32,7 @@ IDENTITY_REGISTRY_ABI = [
     {
         "name": "getMetadata",
         "type": "function",
+        "stateMutability": "view",
         "inputs": [
             {"name": "agentId", "type": "uint256"},
             {"name": "metadataKey", "type": "string"},
@@ -39,8 +42,19 @@ IDENTITY_REGISTRY_ABI = [
     {
         "name": "ownerOf",
         "type": "function",
+        "stateMutability": "view",
         "inputs": [{"name": "tokenId", "type": "uint256"}],
         "outputs": [{"name": "", "type": "address"}],
+    },
+    # ERC-721 Transfer event — used to parse agentId after registration
+    {
+        "name": "Transfer",
+        "type": "event",
+        "inputs": [
+            {"name": "from", "type": "address", "indexed": True},
+            {"name": "to", "type": "address", "indexed": True},
+            {"name": "tokenId", "type": "uint256", "indexed": True},
+        ],
     },
 ]
 
@@ -139,8 +153,13 @@ class IdentityManager:
             tx_hash = self._web3.eth.send_raw_transaction(signed.raw_transaction)
             receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
 
-            # Parse agent ID from logs
-            self.agent_id = receipt.get("logs", [{}])[0].get("topics", [None, None])[1]
+            # Parse agent ID from ERC-721 Transfer event (topics[3] = tokenId)
+            # Transfer(address from, address to, uint256 tokenId) — all indexed
+            for log in receipt.get("logs", []):
+                if len(log.get("topics", [])) >= 4:
+                    self.agent_id = int(log["topics"][3].hex(), 16)
+                    break
+
             self.agent_uri = agent_uri
 
             logger.info(f"Agent registered on-chain",

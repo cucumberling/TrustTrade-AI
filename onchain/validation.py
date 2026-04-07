@@ -36,6 +36,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "name": "validationRequest",
         "type": "function",
+        "stateMutability": "nonpayable",
         "inputs": [
             {"name": "validatorAddress", "type": "address"},
             {"name": "agentId", "type": "uint256"},
@@ -47,6 +48,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "name": "validationResponse",
         "type": "function",
+        "stateMutability": "nonpayable",
         "inputs": [
             {"name": "requestHash", "type": "bytes32"},
             {"name": "response", "type": "uint8"},
@@ -59,6 +61,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "name": "getValidationStatus",
         "type": "function",
+        "stateMutability": "view",
         "inputs": [{"name": "requestHash", "type": "bytes32"}],
         "outputs": [
             {"name": "status", "type": "uint8"},

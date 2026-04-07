@@ -7,6 +7,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+# Load .env file if present (before any os.getenv calls below)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 @dataclass
 class KrakenConfig:
@@ -24,11 +31,15 @@ class OnChainConfig:
     rpc_url: str = os.getenv("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org")
     private_key: str = os.getenv("AGENT_PRIVATE_KEY", "")
     chain_id: int = 84532  # Base Sepolia
-    identity_registry_address: str = os.getenv("IDENTITY_REGISTRY_ADDRESS", "")
-    reputation_registry_address: str = os.getenv("REPUTATION_REGISTRY_ADDRESS", "")
+    identity_registry_address: str = os.getenv(
+        "IDENTITY_REGISTRY_ADDRESS", "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    )
+    reputation_registry_address: str = os.getenv(
+        "REPUTATION_REGISTRY_ADDRESS", "0x8004B663056A597Dffe9eCcC1965A193B7388713"
+    )
     validation_registry_address: str = os.getenv("VALIDATION_REGISTRY_ADDRESS", "")
     agent_uri: str = ""  # IPFS or HTTPS URI for Agent Registration JSON
-    gas_limit: int = 500_000
+    gas_limit: int = 800_000
 
 
 @dataclass

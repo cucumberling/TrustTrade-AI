@@ -12,6 +12,7 @@ REPUTATION_REGISTRY_ABI = [
     {
         "name": "giveFeedback",
         "type": "function",
+        "stateMutability": "nonpayable",
         "inputs": [
             {"name": "agentId", "type": "uint256"},
             {"name": "value", "type": "int128"},
@@ -27,6 +28,7 @@ REPUTATION_REGISTRY_ABI = [
     {
         "name": "getSummary",
         "type": "function",
+        "stateMutability": "view",
         "inputs": [
             {"name": "agentId", "type": "uint256"},
             {"name": "clientAddresses", "type": "address[]"},
