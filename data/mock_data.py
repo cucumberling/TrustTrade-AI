@@ -63,11 +63,21 @@ def generate_ohlcv(
 
 
 def get_sample_btc_prices() -> list[float]:
-    """Return a deterministic sample BTC price series for testing."""
-    return generate_price_series(
-        base_price=65000.0,
-        num_points=50,
-        volatility=0.015,
-        trend=0.0002,
-        seed=42,
-    )
+    """Return a deterministic sample BTC price series for demo.
+
+    Uses a composite of trend + cycle to produce clear buy/sell signals,
+    making the demo visually compelling.
+    """
+    import math
+    base = 65000.0
+    n = 80
+    random.seed(42)
+    prices = []
+    for i in range(n):
+        # Composite: uptrend → pullback → rally → crash → recovery
+        t = i / n
+        trend = base * (1 + 0.08 * t)                        # gentle uptrend
+        cycle = base * 0.03 * math.sin(2 * math.pi * t * 3)  # 3 cycles
+        noise = random.gauss(0, base * 0.005)
+        prices.append(trend + cycle + noise)
+    return prices

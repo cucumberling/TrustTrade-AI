@@ -1,11 +1,4 @@
 from __future__ import annotations
-"""
-TrustTrade AI — Streamlit Dashboard
-Interactive visual interface for the multi-agent trading system.
-Supports Chinese / English language switching.
-
-Run: streamlit run dashboard.py
-"""
 
 import sys
 import time
@@ -79,7 +72,7 @@ LANG = {
         "erc8004": "ERC-8004 Validation Artifacts",
         "no_artifacts": "No validation artifacts generated.",
         "full_log": "Full Decision Log (all rounds)",
-        "empty_state": "Click **Run** in the sidebar to start the trading agent.",
+        "empty_state": "Click **Run** above to start the trading agent.",
         "how_it_works": "How it works",
         "how_desc": """
 1. **Signal Agent** analyzes market data using trend (MA crossover) and momentum (RSI + MACD) strategies
@@ -88,7 +81,7 @@ LANG = {
 4. **Manager Agent** makes the final decision and generates ERC-8004 validation artifacts
 5. **Execution Agent** routes orders to Kraken CLI (paper/live) or internal simulation
 
-Choose a mode in the sidebar and click **Run** to begin.
+Choose a mode and click **Run** to begin.
 """,
         # Agent decision process section
         "agent_process": "Agent Decision Process",
@@ -163,7 +156,7 @@ Choose a mode in the sidebar and click **Run** to begin.
         "erc8004": "ERC-8004 链上验证记录",
         "no_artifacts": "暂无验证记录。",
         "full_log": "完整决策日志（所有轮次）",
-        "empty_state": "点击侧边栏的 **运行** 按钮启动交易 Agent。",
+        "empty_state": "点击上方 **运行** 按钮启动交易 Agent。",
         "how_it_works": "工作原理",
         "how_desc": """
 1. **Signal Agent（分析师）** 用趋势（均线交叉）和动量（RSI + MACD）策略分析市场数据
@@ -172,7 +165,7 @@ Choose a mode in the sidebar and click **Run** to begin.
 4. **Manager Agent（决策者）** 综合所有 Agent 意见做最终决定，生成 ERC-8004 验证产物
 5. **Execution Agent（交易员）** 通过 Kraken CLI（模拟/实盘）或内部模拟执行订单
 
-在侧边栏选择模式，点击 **运行** 开始。
+选择模式，点击 **运行** 开始。
 """,
         # Agent decision process section
         "agent_process": "Agent 决策过程",
@@ -216,7 +209,7 @@ st.set_page_config(
     page_title="TrustTrade AI",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # --- Session State Initialization ---
@@ -235,7 +228,9 @@ if "lang" not in st.session_state:
 
 
 def reset_system():
-    st.session_state.portfolio = PortfolioTracker(initial_balance=settings.portfolio.initial_balance)
+    st.session_state.portfolio = PortfolioTracker()
+    st.session_state.signal_agent = SignalAgent()
+    st.session_state.risk_agent = RiskAgent()
     st.session_state.manager = ManagerAgent(st.session_state.portfolio)
     st.session_state.executor = ExecutionAgent(st.session_state.portfolio)
     st.session_state.round_history = []
@@ -243,78 +238,87 @@ def reset_system():
     st.session_state.running = False
 
 
-# --- Sidebar ---
-with st.sidebar:
-    st.title("TrustTrade AI")
-    st.caption(t("subtitle"))
+# ============================================================
+# TOP BAR — Title + Core Controls (one line)
+# ============================================================
+top_title, top_mode, top_pair, top_balance, top_run, top_reset, top_lang = st.columns(
+    [2.0, 1.2, 1.2, 1.4, 0.8, 0.8, 0.8]
+)
 
-    # Language switcher
-    lang_options = {"中文": "zh", "English": "en"}
+with top_title:
+    st.markdown("### TrustTrade AI")
+
+with top_mode:
+    mode = st.selectbox(t("trading_mode"), ["demo", "paper", "backtest"], index=0, key="k_mode", label_visibility="collapsed")
+    settings.mode = mode
+
+with top_pair:
+    pair = st.selectbox(t("trading_pair"), ["BTC/USD", "ETH/USD"], index=0, key="k_pair", label_visibility="collapsed")
+    settings.trading_pair = pair
+
+with top_balance:
+    balance = st.number_input(t("initial_balance"), value=10000.0, min_value=100.0, step=1000.0, key="k_balance", label_visibility="collapsed")
+    settings.portfolio.initial_balance = balance
+
+with top_run:
+    run_btn = st.button(t("run"), type="primary", use_container_width=True)
+
+with top_reset:
+    reset_btn = st.button(t("reset"), use_container_width=True)
+    if reset_btn:
+        reset_system()
+        st.rerun()
+
+with top_lang:
+    lang_options = {"中文": "zh", "EN": "en"}
     selected_lang = st.selectbox(
         t("language"),
         list(lang_options.keys()),
         index=0 if st.session_state.lang == "zh" else 1,
+        label_visibility="collapsed",
     )
     new_lang = lang_options[selected_lang]
     if new_lang != st.session_state.lang:
         st.session_state.lang = new_lang
         st.rerun()
 
-    st.divider()
+# ============================================================
+# SECOND ROW — Strategy & Risk params (expandable)
+# ============================================================
+with st.expander(f"⚙ {t('strategy_params')} / {t('risk_params')}", expanded=False):
+    p_col1, p_col2, p_col3, p_col4, p_col5, p_col6, p_col7 = st.columns(7)
 
-    # Mode selection
-    mode = st.selectbox(t("trading_mode"), ["demo", "paper", "backtest"], index=0, key="k_mode")
-    settings.mode = mode
+    with p_col1:
+        short_ma = st.number_input(t("short_ma"), min_value=3, max_value=20, value=5, key="k_short_ma")
+        settings.strategy.short_ma_period = short_ma
 
-    # Trading pair
-    pair = st.selectbox(t("trading_pair"), ["BTC/USD", "ETH/USD"], index=0, key="k_pair")
-    settings.trading_pair = pair
+    with p_col2:
+        long_ma = st.number_input(t("long_ma"), min_value=10, max_value=50, value=20, key="k_long_ma")
+        settings.strategy.long_ma_period = long_ma
 
-    # Balance
-    balance = st.number_input(t("initial_balance"), value=10000.0, min_value=100.0, step=1000.0, key="k_balance")
-    settings.portfolio.initial_balance = balance
+    with p_col3:
+        rsi_period = st.number_input(t("rsi_period"), min_value=5, max_value=30, value=14, key="k_rsi")
+        settings.strategy.rsi_period = rsi_period
 
-    st.divider()
-    st.subheader(t("strategy_params"))
+    with p_col4:
+        max_pos = st.number_input(t("max_position"), min_value=0.01, max_value=0.30, value=0.10, step=0.01, format="%.2f", key="k_max_pos")
+        settings.risk.max_position_pct = max_pos
 
-    short_ma = st.slider(t("short_ma"), 3, 20, 5, key="k_short_ma")
-    long_ma = st.slider(t("long_ma"), 10, 50, 20, key="k_long_ma")
-    rsi_period = st.slider(t("rsi_period"), 5, 30, 14, key="k_rsi")
-    settings.strategy.short_ma_period = short_ma
-    settings.strategy.long_ma_period = long_ma
-    settings.strategy.rsi_period = rsi_period
+    with p_col5:
+        max_dd = st.number_input(t("max_drawdown"), min_value=0.05, max_value=0.30, value=0.15, step=0.01, format="%.2f", key="k_max_dd")
+        settings.risk.max_drawdown_pct = max_dd
 
-    st.divider()
-    st.subheader(t("risk_params"))
+    with p_col6:
+        daily_loss = st.number_input(t("daily_loss"), min_value=0.01, max_value=0.10, value=0.05, step=0.01, format="%.2f", key="k_daily_loss")
+        settings.risk.daily_loss_limit_pct = daily_loss
 
-    max_pos = st.slider(t("max_position"), 0.01, 0.30, 0.10, key="k_max_pos")
-    max_dd = st.slider(t("max_drawdown"), 0.05, 0.30, 0.15, key="k_max_dd")
-    daily_loss = st.slider(t("daily_loss"), 0.01, 0.10, 0.05, key="k_daily_loss")
-    settings.risk.max_position_pct = max_pos
-    settings.risk.max_drawdown_pct = max_dd
-    settings.risk.daily_loss_limit_pct = daily_loss
-
-    st.divider()
-
-    # Kraken CLI status
-    kraken = KrakenExecutor()
-    cli_available = kraken.is_available()
-    if cli_available:
-        st.success(t("kraken_connected"))
-    else:
-        st.warning(t("kraken_missing"))
-
-    st.divider()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        run_btn = st.button(t("run"), type="primary", use_container_width=True)
-    with col2:
-        reset_btn = st.button(t("reset"), use_container_width=True)
-
-    if reset_btn:
-        reset_system()
-        st.rerun()
+    with p_col7:
+        kraken = KrakenExecutor()
+        cli_available = kraken.is_available()
+        if cli_available:
+            st.success(t("kraken_connected"))
+        else:
+            st.warning(t("kraken_missing"))
 
 
 # --- Helper: Run one trading round ---
@@ -374,21 +378,21 @@ def run_round(prices: list[float]) -> dict:
     return round_data
 
 
-# --- Collect current params snapshot (string for reliable comparison) ---
-current_params = f"{mode}|{pair}|{balance}|{short_ma}|{long_ma}|{rsi_period}|{max_pos:.4f}|{max_dd:.4f}|{daily_loss:.4f}"
-
-# --- Main Content ---
-st.title(t("page_title"))
-
-
 def execute_run():
     """Run the full agent loop with current settings."""
-    reset_system()
+    # Recreate all agents with fresh state
+    st.session_state.portfolio = PortfolioTracker(initial_balance=balance)
+    st.session_state.signal_agent = SignalAgent()
+    st.session_state.risk_agent = RiskAgent()
+    st.session_state.manager = ManagerAgent(st.session_state.portfolio)
+    st.session_state.executor = ExecutionAgent(st.session_state.portfolio)
+    st.session_state.round_history = []
+    st.session_state.price_history = []
 
     if mode == "demo":
         prices_full = get_sample_btc_prices()
     elif mode == "backtest":
-        prices_full = generate_price_series(base_price=65000, num_points=200, volatility=0.02, seed=42)
+        prices_full = generate_price_series(base_price=65000, num_points=200, volatility=0.02)
     else:  # paper — try Kraken CLI
         prices_full = kraken_feed.get_price_series(pair)
 
@@ -407,17 +411,9 @@ def execute_run():
         )
 
     progress.empty()
-    st.session_state.last_params = current_params
 
 
-# Determine whether to run: button click OR parameter change after first run
-params_changed = (
-    "last_params" in st.session_state
-    and st.session_state.last_params != current_params
-    and len(st.session_state.round_history) > 0
-)
-
-if run_btn or params_changed:
+if run_btn:
     execute_run()
     st.success(t("completed").format(n=len(st.session_state.round_history)))
 
@@ -431,7 +427,7 @@ if st.session_state.round_history:
     col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     final_value = df["total_value"].iloc[-1]
-    total_return = ((final_value - settings.portfolio.initial_balance) / settings.portfolio.initial_balance) * 100
+    total_return = ((final_value - balance) / balance) * 100
 
     col1.metric(t("portfolio_value"), f"${final_value:,.2f}", f"{total_return:+.2f}%")
     col2.metric(t("realized_pnl"), f"${metrics.total_pnl:,.2f}")
@@ -595,14 +591,18 @@ if st.session_state.round_history:
     fig.add_hline(y=-0.15, line_dash="dash", line_color="gray", row=2, col=1)
 
     # Portfolio value
+    total_values = df["total_value"].tolist()
     fig.add_trace(
-        go.Scatter(x=df["round"].tolist(), y=df["total_value"].tolist(), name=t("portfolio_value"),
-                   line=dict(color="#4CAF50", width=2), fill="tozeroy",
-                   fillcolor="rgba(76, 175, 80, 0.1)"),
+        go.Scatter(x=df["round"].tolist(), y=total_values, name=t("portfolio_value"),
+                   line=dict(color="#4CAF50", width=2)),
         row=3, col=1,
     )
-    fig.add_hline(y=settings.portfolio.initial_balance, line_dash="dash",
-                  line_color="gray", row=3, col=1)
+    fig.add_hline(y=balance, line_dash="dash", line_color="gray", row=3, col=1)
+    # Auto-range around actual values so the curve isn't flat
+    val_min = min(total_values)
+    val_max = max(total_values)
+    val_pad = max((val_max - val_min) * 0.3, balance * 0.005)
+    fig.update_yaxes(range=[val_min - val_pad, val_max + val_pad], row=3, col=1)
 
     fig.update_layout(height=700, showlegend=True, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
