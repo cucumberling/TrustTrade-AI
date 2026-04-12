@@ -73,6 +73,7 @@ class ExecutionAgent:
                 self.portfolio.open_position(
                     pair, side, volume, fill_price,
                     trade.stop_loss, trade.take_profit,
+                    leverage=settings.portfolio.leverage,
                 )
 
             logger.log_trade(trade.direction, pair, volume, fill_price, "kraken_paper")
@@ -109,6 +110,7 @@ class ExecutionAgent:
                 self.portfolio.open_position(
                     pair, pos_side, volume, fill_price,
                     trade.stop_loss, trade.take_profit,
+                    leverage=settings.portfolio.leverage,
                 )
 
             logger.log_trade(trade.direction, pair, volume, fill_price, "kraken_live")
@@ -127,9 +129,28 @@ class ExecutionAgent:
             message="Kraken live order failed",
         )
 
+    def _apply_slippage(self, mid_price: float, direction: str, pair: str) -> float:
+        """Apply adverse slippage to a market order fill price.
+        BUY  → fill above mid (pay more).
+        SELL → fill below mid (receive less).
+        CLOSE → use opposite side of the open position (long close = sell, short close = buy).
+        """
+        bps = settings.portfolio.slippage_bps / 10_000.0
+        if direction == "BUY":
+            return mid_price * (1 + bps)
+        if direction == "SELL":
+            return mid_price * (1 - bps)
+        if direction == "CLOSE":
+            pos = self.portfolio.positions.get(pair)
+            if pos is None:
+                return mid_price
+            # Closing a long means selling → fill lower; closing a short means buying → fill higher.
+            return mid_price * (1 - bps) if pos.side == "long" else mid_price * (1 + bps)
+        return mid_price
+
     def _execute_internal(self, trade: TradeIntent) -> ExecutionResult:
         """Execute trade using internal portfolio simulation (no external dependency)."""
-        price = trade.entry_price
+        price = self._apply_slippage(trade.entry_price, trade.direction, trade.pair)
 
         if trade.direction == "CLOSE":
             pnl = self.portfolio.close_position(trade.pair, price)
@@ -152,6 +173,7 @@ class ExecutionAgent:
         success = self.portfolio.open_position(
             pair=trade.pair, side=side, quantity=trade.quantity, price=price,
             stop_loss=trade.stop_loss, take_profit=trade.take_profit,
+            leverage=settings.portfolio.leverage,
         )
 
         if success:

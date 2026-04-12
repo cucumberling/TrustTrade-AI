@@ -70,17 +70,22 @@ class TradingSystem:
     def run_single_round(self, prices: list[float]) -> dict:
         """Execute one complete trading round through the agent pipeline."""
         self.round_count += 1
+        # Lookahead-bias fix: signals computed on closed bars only,
+        # execution price = current bar's open (proxied by prices[-1]).
+        if len(prices) < 2:
+            return {}
+        signal_prices = prices[:-1]
         current_price = prices[-1]
 
         logger.info(f"\n{'='*40} Round {self.round_count} {'='*40}")
         logger.info(f"Current Price: ${current_price:,.2f} | Prices: {len(prices)} data points")
 
         # Step 1: Signal Agent — analyze market
-        signal = self.signal_agent.analyze(prices)
+        signal = self.signal_agent.analyze(signal_prices)
 
         # Step 2: Risk Agent — evaluate risk
         risk = self.risk_agent.evaluate(
-            prices=prices,
+            prices=signal_prices,
             proposed_direction=signal.direction,
             portfolio=self.portfolio,
             current_price=current_price,
@@ -90,7 +95,7 @@ class TradingSystem:
         decision = self.manager.decide(
             signal=signal,
             risk=risk,
-            prices=prices,
+            prices=signal_prices,
             current_price=current_price,
         )
 
@@ -178,8 +183,17 @@ class TradingSystem:
         logger.info(f"{'='*60}\n")
 
         count = 0
+        import datetime
+        last_reset_date = datetime.date.today()
         try:
             while rounds == 0 or count < rounds:
+                # Reset daily PnL at day boundary
+                today = datetime.date.today()
+                if today != last_reset_date:
+                    self.portfolio.reset_daily_pnl()
+                    logger.info(f"Daily PnL reset for {today}")
+                    last_reset_date = today
+
                 prices = kraken_feed.get_price_series()
                 if prices:
                     self.run_single_round(prices)

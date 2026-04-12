@@ -20,6 +20,9 @@ class Position:
     entry_time: str = ""
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    open_fee: float = 0.0  # Fee paid when opening this position
+    leverage: float = 1.0  # 1.0 = spot, >1 = margin trading
+    margin_used: float = 0.0  # Cash collateral locked (= notional / leverage)
 
     @property
     def notional_value(self) -> float:
@@ -44,6 +47,8 @@ class TradeRecord:
 
 
 class PortfolioTracker:
+    FEE_RATE = 0.001  # 0.1% taker fee (Kraken standard)
+
     def __init__(self, initial_balance: Optional[float] = None):
         self.balance = initial_balance or settings.portfolio.initial_balance
         self.initial_balance = self.balance
@@ -52,6 +57,7 @@ class PortfolioTracker:
         self.daily_pnl: float = 0.0
         self.peak_balance: float = self.balance
         self.consecutive_losses: int = 0
+        self.total_fees: float = 0.0
 
     def open_position(
         self,
@@ -61,17 +67,21 @@ class PortfolioTracker:
         price: float,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        leverage: float = 1.0,
     ) -> bool:
-        cost = quantity * price
-        if cost > self.balance:
-            logger.warning(f"Insufficient balance: need {cost:.2f}, have {self.balance:.2f}")
+        notional = quantity * price
+        margin = notional / leverage  # Cash actually locked (= notional at 1x, smaller at higher lev)
+        fee = notional * self.FEE_RATE  # Fee charged on full notional, not just margin
+        if margin + fee > self.balance:
+            logger.warning(f"Insufficient balance: need {margin + fee:.2f}, have {self.balance:.2f}")
             return False
 
         if pair in self.positions:
             logger.warning(f"Position already open for {pair}")
             return False
 
-        self.balance -= cost
+        self.balance -= margin + fee
+        self.total_fees += fee
         self.positions[pair] = Position(
             pair=pair,
             side=side,
@@ -80,6 +90,9 @@ class PortfolioTracker:
             entry_time=datetime.now(timezone.utc).isoformat(),
             stop_loss=stop_loss,
             take_profit=take_profit,
+            open_fee=fee,
+            leverage=leverage,
+            margin_used=margin,
         )
 
         self.trade_history.append(TradeRecord(
@@ -90,6 +103,11 @@ class PortfolioTracker:
             price=price,
         ))
 
+        # Update peak after opening to avoid false drawdown
+        tv = self.total_value(price)
+        if tv > self.peak_balance:
+            self.peak_balance = tv
+
         logger.info(f"Opened {side} position", pair=pair, quantity=quantity, price=price)
         return True
 
@@ -99,9 +117,16 @@ class PortfolioTracker:
             return None
 
         pos = self.positions[pair]
-        pnl = pos.unrealized_pnl(price)
-        proceeds = pos.quantity * price
-        self.balance += proceeds
+        raw_pnl = pos.unrealized_pnl(price)
+        trade_value = pos.quantity * price  # Notional at exit
+
+        # Margin model: return locked margin + raw_pnl (works for long & short, 1x and >1x)
+        proceeds = pos.margin_used + raw_pnl
+
+        fee = trade_value * self.FEE_RATE  # Fee always on full notional
+        self.balance += proceeds - fee
+        self.total_fees += fee
+        pnl = raw_pnl - (pos.open_fee + fee)  # net of both open and close fees
         self.daily_pnl += pnl
 
         # Track consecutive losses
@@ -129,14 +154,15 @@ class PortfolioTracker:
         return pnl
 
     def total_value(self, current_prices: Union[Dict[str, float], float] = 0) -> float:
-        """Total portfolio value = balance + sum of position values."""
+        """Total portfolio value = balance + locked margin + unrealized PnL on positions.
+        Works uniformly for long/short and any leverage."""
         total = self.balance
         for pair, pos in self.positions.items():
             if isinstance(current_prices, dict):
                 price = current_prices.get(pair, pos.entry_price)
             else:
                 price = current_prices if current_prices > 0 else pos.entry_price
-            total += pos.quantity * price
+            total += pos.margin_used + pos.unrealized_pnl(price)
         return total
 
     def current_drawdown(self, current_price: float = 0) -> float:
@@ -156,7 +182,9 @@ class PortfolioTracker:
                 price = current_prices.get(pair, pos.entry_price)
             else:
                 price = current_prices if current_prices > 0 else pos.entry_price
-            total += pos.unrealized_pnl(price)
+            raw = pos.unrealized_pnl(price)
+            # Include open fee that was already deducted from balance
+            total += raw - pos.open_fee
         return total
 
     def get_state(self, current_price: float = 0) -> dict:

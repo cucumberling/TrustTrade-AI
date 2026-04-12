@@ -48,7 +48,9 @@ class KrakenFeed:
         return self._run_cli("ticker", pair)
 
     def get_ohlc(self, pair: Optional[str] = None, interval: int = 60) -> Optional[list]:
-        """Get OHLC candlestick data from Kraken CLI."""
+        """Get OHLC candlestick data from Kraken CLI.
+        interval is in minutes. 60 = 1h candle (Kraken returns 720 of them = 30 days).
+        """
         pair = pair or self.pair
         result = self._run_cli("ohlc", pair, "--interval", str(interval))
         if result and isinstance(result, list):
@@ -57,14 +59,25 @@ class KrakenFeed:
 
     def get_current_price(self, pair: Optional[str] = None) -> Optional[float]:
         """Get the current price for a pair."""
+        pair = pair or self.pair
         ticker = self.get_ticker(pair)
-        if ticker and isinstance(ticker, list) and len(ticker) > 0:
-            return float(ticker[0].get("last", 0))
-        if ticker and isinstance(ticker, dict):
-            return float(ticker.get("last", ticker.get("c", [0])[0]))
+        if not ticker or not isinstance(ticker, dict):
+            return None
+        # Kraken CLI returns {"BTC/USD": {"c": ["71840.9", ...], ...}}
+        # Navigate into the pair key first, then extract last-trade price.
+        for key in (pair, pair.replace("/", ""), "XXBTZUSD", "XETHZUSD"):
+            if key in ticker:
+                data = ticker[key]
+                # "c" is the "close/last trade" array: [price, volume]
+                if isinstance(data, dict) and "c" in data:
+                    return float(data["c"][0])
+                break
+        # Flat dict fallback (e.g. list-style CLI output)
+        if "last" in ticker:
+            return float(ticker["last"])
         return None
 
-    def get_price_series(self, pair: Optional[str] = None, count: int = 50) -> list[float]:
+    def get_price_series(self, pair: Optional[str] = None, count: int = 100) -> list[float]:
         """Get closing prices. 3-tier fallback: CLI → REST → Mock."""
         # Tier 1: Kraken CLI
         ohlc = self.get_ohlc(pair=pair)
@@ -95,6 +108,7 @@ class KrakenFeed:
         try:
             import urllib.request
             api_pair = pair.replace("BTC", "XBT").replace("/", "")
+            # interval=60 → 1h candles. Kraken returns ~720 candles = 30 days of history.
             url = f"{settings.kraken.rest_url}/0/public/OHLC?pair={api_pair}&interval=60"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:

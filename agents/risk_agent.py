@@ -22,6 +22,7 @@ class RiskDecision:
 class RiskAgent:
     def __init__(self):
         self.config = settings.risk
+        self._halt_cooldown = 0  # Rounds remaining in cooldown after consecutive loss halt
 
     def evaluate(
         self,
@@ -62,22 +63,34 @@ class RiskAgent:
             )
         risk_score += (daily_loss_pct / self.config.daily_loss_limit_pct) * 0.2
 
-        # 3. Check consecutive losses
+        # 3. Check consecutive losses (with cooldown recovery)
         if portfolio.consecutive_losses >= self.config.consecutive_loss_halt:
-            reasons.append(
-                f"REJECT: {portfolio.consecutive_losses} consecutive losses (limit: {self.config.consecutive_loss_halt})"
-            )
-            logger.warning("Risk Agent: REJECT — consecutive loss halt")
-            return RiskDecision(
-                action="REJECT", max_position_pct=0,
-                reasons=reasons, risk_score=1.0,
-            )
+            if self._halt_cooldown <= 0:
+                # Start cooldown: skip 10 rounds, then reset and allow trading again
+                self._halt_cooldown = 10
+            self._halt_cooldown -= 1
+            if self._halt_cooldown > 0:
+                reasons.append(
+                    f"REJECT: {portfolio.consecutive_losses} consecutive losses — cooling down ({self._halt_cooldown} rounds left)"
+                )
+                logger.warning("Risk Agent: REJECT — consecutive loss cooldown", remaining=self._halt_cooldown)
+                return RiskDecision(
+                    action="REJECT", max_position_pct=0,
+                    reasons=reasons, risk_score=1.0,
+                )
+            else:
+                # Cooldown expired: reset counter, allow trading with reduced size
+                portfolio.consecutive_losses = 0
+                reasons.append("Consecutive loss cooldown expired — resuming with reduced size")
+                max_position_pct *= 0.5
+                risk_score += 0.3
         risk_score += (portfolio.consecutive_losses / self.config.consecutive_loss_halt) * 0.2
 
         # 4. Check volatility
         if len(prices) >= 2:
             returns = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
-            volatility = (sum(r**2 for r in returns) / len(returns)) ** 0.5 if returns else 0
+            mean_r = sum(returns) / len(returns) if returns else 0
+            volatility = (sum((r - mean_r) ** 2 for r in returns) / len(returns)) ** 0.5 if returns else 0
             if volatility > self.config.volatility_threshold:
                 reasons.append(
                     f"High volatility {volatility:.4f} exceeds threshold {self.config.volatility_threshold}"
@@ -104,11 +117,16 @@ class RiskAgent:
 
         risk_score = min(1.0, risk_score)
 
-        # Determine action
-        if risk_score > 0.7:
+        # Determine action — smooth scaling between 0.5 and 0.9
+        if risk_score > 0.9:
             action = "REDUCE_SIZE"
-            max_position_pct *= 0.5
-            reasons.append(f"Risk score high ({risk_score:.2f}): reducing position size")
+            max_position_pct *= 0.25
+            reasons.append(f"Risk score very high ({risk_score:.2f}): 75% size reduction")
+        elif risk_score > 0.5:
+            action = "REDUCE_SIZE"
+            scale = 1.0 - 0.75 * (risk_score - 0.5) / 0.4
+            max_position_pct *= scale
+            reasons.append(f"Risk score elevated ({risk_score:.2f}): {(1-scale)*100:.0f}% size reduction")
         else:
             action = "APPROVE"
             reasons.append(f"Risk score acceptable ({risk_score:.2f})")

@@ -1,0 +1,71 @@
+TrustTrade AI — Demo Video Script
+===================================
+Total: ~3.5 minutes
+Language: English
+
+
+[0:00 - 0:12] INTRO — Show dashboard homepage
+"This is TrustTrade AI, a multi-agent Web3 crypto trading system
+built with five specialized AI agents, Kraken CLI, and ERC-8004
+on-chain validation."
+
+
+[0:12 - 0:25] PARAMETERS — Expand Strategy Parameters
+"The system offers five risk presets — balanced, aggressive,
+conservative, trend-following, and mean-reversion — each with
+configurable strategy and risk parameters."
+
+
+[0:25 - 0:40] RUN — Click Run button, wait for completion
+"Let's run a live trading session. Balanced preset, BTC/USD,
+ten thousand dollars starting capital, with three-x leverage."
+
+
+[0:40 - 1:10] RESULTS — Show Portfolio Value, PnL, Win Rate
+"After 660 trading rounds, the system achieved a two-point-three
+percent return with a sixty-six-point-seven percent win rate,
+generating over two hundred thirty dollars in realized profit
+and beating buy-and-hold by two-point-three-one percentage points."
+
+
+[1:10 - 1:35] FUNDAMENTALS — Show Fundamental Context panel
+"Three fundamental agents provide live market intelligence.
+The Funding Rate Agent pulls data from Kraken Futures.
+The Sentiment Agent analyzes the Fear and Greed Index and
+twenty latest Bitcoin news headlines from Cointelegraph.
+The On-Chain Agent monitors mempool activity, fees,
+and hashrate from mempool.space."
+
+
+[1:35 - 2:05] AGENTS — Scroll to Agent Decision Process
+"On every round, five agents collaborate in a pipeline.
+Signal Agent analyzes trends and momentum.
+Risk Agent checks drawdown and loss limits.
+Portfolio Agent calculates position size with stop-loss and take-profit.
+Manager Agent makes the final decision.
+Execution Agent routes the order to Kraken CLI."
+
+
+[2:05 - 2:30] CHARTS — Show Price Chart + Portfolio Value
+"The price chart shows buy and sell signals overlaid on
+the market data. The portfolio equity curve tracks the
+account value throughout the trading session."
+
+
+[2:30 - 2:50] TRADE LOG — Show Trade Log table
+"Every trade is logged with entry price, quantity,
+profit-and-loss, and cumulative returns."
+
+
+[2:50 - 3:25] ERC-8004 — Scroll to ERC-8004 panel
+"What makes TrustTrade unique is full on-chain verification
+through ERC-8004. The Identity Registry registers the agent
+as an NFT on Base Sepolia. The Validation Registry creates
+EIP-712 signed artifacts for every trade — nineteen out of
+nineteen verified. The Reputation Registry tracks trading
+yield and success rate, creating an auditable trust record."
+
+
+[3:25 - 3:40] OUTRO — Stay on ERC-8004 panel
+"TrustTrade AI — trustless, verifiable, multi-agent crypto
+trading. Thank you for watching."

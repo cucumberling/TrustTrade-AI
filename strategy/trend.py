@@ -34,9 +34,20 @@ def analyze_trend(
     if long_ma == 0:
         return TrendSignal(signal=0.0, short_ma=short_ma, long_ma=long_ma, reason="Long MA is zero")
 
-    # Normalized distance between MAs as signal strength
+    # Normalized distance between MAs, scaled by price volatility
     spread = (short_ma - long_ma) / long_ma
-    signal = max(-1.0, min(1.0, spread * 10))  # Scale and clamp
+
+    # Compute recent price volatility (std dev of returns) for adaptive scaling
+    returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
+    recent = returns[-long_period:] if len(returns) >= long_period else returns
+    mean_r = sum(recent) / len(recent) if recent else 0
+    stdev = (sum((r - mean_r) ** 2 for r in recent) / len(recent)) ** 0.5 if recent else 0
+
+    # 1-sigma move → signal ~0.5, 2-sigma → 1.0
+    if stdev > 0:
+        signal = max(-1.0, min(1.0, spread / (2 * stdev)))
+    else:
+        signal = max(-1.0, min(1.0, spread * 3))  # conservative fallback
 
     if signal > 0.1:
         reason = f"Bullish: short MA ({short_ma:.2f}) > long MA ({long_ma:.2f}), spread={spread:.4f}"

@@ -16,17 +16,21 @@ class MomentumSignal:
 
 
 def compute_rsi(prices: list[float], period: int = 14) -> float:
+    """Wilder's smoothed RSI — the industry standard formula."""
     if len(prices) < period + 1:
         return 50.0  # Neutral when insufficient data
 
     changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
-    recent = changes[-(period):]
 
-    gains = [c for c in recent if c > 0]
-    losses = [-c for c in recent if c < 0]
+    # Seed avg_gain / avg_loss with SMA of first `period` changes
+    first = changes[:period]
+    avg_gain = sum(max(c, 0) for c in first) / period
+    avg_loss = sum(max(-c, 0) for c in first) / period
 
-    avg_gain = sum(gains) / period if gains else 0
-    avg_loss = sum(losses) / period if losses else 0
+    # Wilder's smoothing: EMA with alpha = 1/period
+    for c in changes[period:]:
+        avg_gain = (avg_gain * (period - 1) + max(c, 0)) / period
+        avg_loss = (avg_loss * (period - 1) + max(-c, 0)) / period
 
     if avg_loss == 0:
         return 100.0
@@ -94,9 +98,12 @@ def analyze_momentum(
         # Linear interpolation between oversold and overbought
         rsi_signal = 1.0 - 2.0 * (rsi - rsi_oversold) / (rsi_overbought - rsi_oversold)
 
-    # MACD signal: positive histogram = buy, negative = sell
-    price_range = max(prices) - min(prices) if max(prices) != min(prices) else 1.0
-    macd_signal_val = max(-1.0, min(1.0, histogram / (price_range * 0.01)))
+    # MACD signal: normalize histogram by price volatility
+    returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
+    mean_r = sum(returns) / len(returns)
+    stdev = (sum((r - mean_r) ** 2 for r in returns) / len(returns)) ** 0.5
+    norm = stdev * prices[-1] if stdev > 0 else prices[-1] * 0.01
+    macd_signal_val = max(-1.0, min(1.0, histogram / norm))
 
     # Combine RSI and MACD equally
     combined = 0.5 * rsi_signal + 0.5 * macd_signal_val

@@ -49,39 +49,55 @@ class PortfolioAgent:
                 reasoning="No trade signal",
             )
 
-        # Check if we should close an existing position
+        # Position management: HOLD existing positions until SL/TP fires.
+        # Auto-flipping on every opposite signal kills R:R because winners get
+        # cut short and losers exit at the worst possible point. We let
+        # check_stop_loss() handle exits via the SL/TP brackets set at entry.
+        # Only force-close on a STRONG opposite signal (confidence > 0.6) to
+        # avoid being trapped in a losing position when the trend has clearly
+        # reversed.
+        STRONG_FLIP_THRESHOLD = 0.6
         if pair in portfolio.positions:
             pos = portfolio.positions[pair]
-            should_close = (
+            opposite = (
                 (direction == "SELL" and pos.side == "long") or
                 (direction == "BUY" and pos.side == "short")
             )
-            if should_close:
+            if opposite and confidence >= STRONG_FLIP_THRESHOLD:
                 return TradeIntent(
                     pair=pair, direction="CLOSE", quantity=pos.quantity,
                     entry_price=current_price, stop_loss=None, take_profit=None,
                     position_pct=0,
-                    reasoning=f"Closing {pos.side} position — signal reversed to {direction}",
+                    reasoning=f"Closing {pos.side} — strong opposite signal (conf={confidence:.2f})",
                 )
+            # Otherwise hold and let SL/TP handle the exit
+            return TradeIntent(
+                pair=pair, direction="HOLD", quantity=0, entry_price=current_price,
+                stop_loss=pos.stop_loss, take_profit=pos.take_profit, position_pct=0,
+                reasoning=f"Holding {pos.side} position — waiting for SL/TP",
+            )
 
         # Calculate position size
+        # position_pct is the % of equity used as MARGIN.
+        # With leverage L, notional exposure = equity * position_pct * L.
         total_value = portfolio.total_value(current_price)
         position_pct = min(max_position_pct, self._calculate_position_pct(confidence, prices))
-        position_value = total_value * position_pct
-        quantity = position_value / current_price if current_price > 0 else 0
+        leverage = max(1.0, settings.portfolio.leverage)
+        notional_value = total_value * position_pct * leverage
+        quantity = notional_value / current_price if current_price > 0 else 0
 
         # Calculate stop loss and take profit
         atr = self._estimate_atr(prices)
         if direction == "BUY":
-            stop_loss = current_price - 2 * atr
-            take_profit = current_price + 3 * atr
+            stop_loss = current_price - 3 * atr
+            take_profit = current_price + 4.5 * atr
         else:
-            stop_loss = current_price + 2 * atr
-            take_profit = current_price - 3 * atr
+            stop_loss = current_price + 3 * atr
+            take_profit = current_price - 4.5 * atr
 
         reasoning = (
-            f"Position size: {position_pct:.1%} of portfolio "
-            f"(${position_value:.2f}), confidence={confidence:.2f}, "
+            f"Margin: {position_pct:.1%} of equity × {leverage:.0f}x lev = "
+            f"${notional_value:.2f} notional, confidence={confidence:.2f}, "
             f"ATR={atr:.2f}"
         )
 
@@ -107,12 +123,16 @@ class PortfolioAgent:
         return trade
 
     def _calculate_position_pct(self, confidence: float, prices: list[float]) -> float:
-        """Calculate position size as % of portfolio."""
+        """Calculate position size as % of portfolio.
+        Base = fixed_fraction, scaled up by confidence (not down).
+        Minimum 1% to avoid dust trades eaten by fees.
+        """
         if self.config.position_sizing_method == "kelly":
             return self._kelly_criterion(confidence)
         else:
-            # Fixed fraction scaled by confidence
-            return self.risk_per_trade * confidence
+            # Base fraction + confidence scaling (e.g., 40% base → 28%-60% range)
+            pct = self.risk_per_trade * (0.7 + 0.8 * confidence)
+            return max(0.05, pct)  # Floor at 5% to avoid dust trades
 
     def _kelly_criterion(self, confidence: float) -> float:
         """Simplified Kelly criterion: f = (bp - q) / b
@@ -130,13 +150,15 @@ class PortfolioAgent:
         return min(kelly, settings.risk.max_position_pct)
 
     def _estimate_atr(self, prices: list[float], period: int = 14) -> float:
-        """Estimate Average True Range from price series."""
+        """Estimate ATR using stdev of returns as proxy (close-only data)."""
         if len(prices) < 2:
             return prices[-1] * 0.02 if prices else 0
 
-        true_ranges = [abs(prices[i] - prices[i-1]) for i in range(1, len(prices))]
-        recent = true_ranges[-period:]
-        return sum(recent) / len(recent) if recent else 0
+        returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
+        recent = returns[-period:]
+        mean_r = sum(recent) / len(recent)
+        stdev = (sum((r - mean_r) ** 2 for r in recent) / len(recent)) ** 0.5
+        return stdev * prices[-1]
 
     def check_stop_loss(
         self,
