@@ -899,11 +899,14 @@ if st.session_state.round_history:
     buy_rounds = df[df["final_action"] == "BUY"]
     sell_rounds = df[df["final_action"].isin(["SELL", "CLOSE"])]
 
-    window_offset = 20
+    # The trading window used during execution; round 1 starts at prices[window]
+    window_offset = max(60, settings.strategy.long_ma_period + 10)
 
     if not buy_rounds.empty:
         buy_indices = (buy_rounds["round"] - 1 + window_offset).tolist()
-        buy_prices_list = buy_rounds["price"].tolist()
+        # Use the actual price from the prices array to ensure markers sit exactly on the line
+        buy_prices_list = [prices[int(idx)] if int(idx) < len(prices) else buy_rounds.iloc[i]["price"]
+                           for i, idx in enumerate(buy_indices)]
         fig.add_trace(
             go.Scatter(x=buy_indices, y=buy_prices_list, mode="markers",
                        name="BUY", marker=dict(color="#00C853", size=14, symbol="triangle-up",
@@ -913,7 +916,8 @@ if st.session_state.round_history:
 
     if not sell_rounds.empty:
         sell_indices = (sell_rounds["round"] - 1 + window_offset).tolist()
-        sell_prices_list = sell_rounds["price"].tolist()
+        sell_prices_list = [prices[int(idx)] if int(idx) < len(prices) else sell_rounds.iloc[i]["price"]
+                            for i, idx in enumerate(sell_indices)]
         fig.add_trace(
             go.Scatter(x=sell_indices, y=sell_prices_list, mode="markers",
                        name="SELL/CLOSE", marker=dict(color="#FF1744", size=14, symbol="triangle-down",
